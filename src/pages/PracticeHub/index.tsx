@@ -6,7 +6,16 @@ import FullName from './components/CountFullName.tsx'
 import FilterShop from './components/FilterShop.tsx'
 import BigFilter from './components/BigFilter.tsx'
 import NamePrice from './components/NamePrice.tsx'
-type TabId = 'countdown' | 'interval' | 'search' | 'fullName' | 'filterShop' | 'bigFilter' | 'namePrice'
+import PrevCount from './components/PrevCount.tsx'
+type TabId =
+  | 'countdown'
+  | 'interval'
+  | 'search'
+  | 'fullName'
+  | 'filterShop'
+  | 'bigFilter'
+  | 'namePrice'
+  | 'prevCount'
 
 const tabs: { id: TabId; label: string }[] = [
   { id: 'countdown', label: 'CountDown（标题）' },
@@ -16,6 +25,7 @@ const tabs: { id: TabId; label: string }[] = [
   { id: 'filterShop', label: 'FilterShop（过滤）' },
   { id: 'bigFilter', label: 'BigFilter（大过滤）' },
   { id: 'namePrice', label: 'NamePrice（名称价格）' },
+  { id: 'prevCount', label: 'PrevCount（上一次）' },
 ]
 
 export default function PracticeHub() {
@@ -54,6 +64,7 @@ export default function PracticeHub() {
         {active === 'filterShop' && <FilterShop />}
         {active === 'bigFilter' && <BigFilter />}
         {active === 'namePrice' && <NamePrice />}
+        {active === 'prevCount' && <PrevCount />}
       </div>
     </div>
   )
