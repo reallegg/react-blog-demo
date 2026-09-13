@@ -3,8 +3,12 @@ export type AsyncTask<T> = () => Promise<T>
 export async function runWithConcurrency<T>(
   tasks: AsyncTask<T>[],
   limit: number
-): Promise<T[]> {
-  const results: T[] = new Array(tasks.length)
+): Promise<PromiseSettledResult<T>[]> {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new RangeError('并发上限必须是正整数')
+  }
+
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length)
 
   let currentIndex = 0
 
@@ -16,7 +20,11 @@ export async function runWithConcurrency<T>(
         return
       }
 
-      results[index] = await tasks[index]()
+      try {
+        results[index] = { status: 'fulfilled', value: await tasks[index]() }
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason }
+      }
     }
   }
 

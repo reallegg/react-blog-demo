@@ -26,5 +26,4 @@ export interface UploadMetrics {
   retrySuccessCount: number
 
   totalDuration: number
-  maxConcurrency: number
 }
