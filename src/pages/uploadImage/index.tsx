@@ -14,17 +14,16 @@ export default function ImageUploader() {
   const runningRef = useRef(false)
   const [totalDuration, setTotalDuration] = useState(0)
   const metrics: UploadMetrics = {
-  total: items.length,
+    total: items.length,
 
-  successCount: items.filter((item) => item.status === 'success').length,
-  failedCount: items.filter((item) => item.status === 'failed').length,
+    successCount: items.filter((item) => item.status === 'success').length,
+    failedCount: items.filter((item) => item.status === 'failed').length,
 
-  firstAttemptFailedCount: items.filter((item) => item.status === 'failed').length,
-  retryCount: 0,
-  retrySuccessCount: 0,
+    firstAttemptFailedCount: items.filter((item) => item.firstAttemptFailed).length,
+    retryCount: items.reduce((total, item) => total + item.retryCount, 0),
 
-  totalDuration,
-}
+    totalDuration,
+  }
 
   const handleFileChange = (
     event: React.ChangeEvent<HTMLInputElement>
@@ -37,6 +36,7 @@ export default function ImageUploader() {
       file,
       status: 'pending',
       retryCount: 0,
+      firstAttemptFailed: false,
     }))
 
     setItems(newItems)
@@ -46,46 +46,85 @@ export default function ImageUploader() {
   const handleUpload = async () => {
     // 用 ref 同步拦截重复点击，避免状态更新前启动多个批次。
     if (runningRef.current) return
-    // 先保留原列表索引，再筛选待上传任务，避免筛选后索引错位。
-    const batch = items
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.status === 'pending')
+    const batch = items.filter((item) => item.status === 'pending')
     if (batch.length === 0) return
 
     // 锁定本批次，并记录开始时间，用于计算整批耗时。
     runningRef.current = true
     setIsUploading(true)
     const start = performance.now()
-    // 上传期间列表不能替换或重排，因此可按原索引更新，保持选择顺序。
-    const updateItem = (index: number, patch: Partial<UploadItem>) => {
-      setItems((current) => current.map((item, itemIndex) => (
-        itemIndex === index ? { ...item, ...patch } : item
+    const updateItem = (id: string, patch: Partial<UploadItem>) => {
+      setItems((current) => current.map((item) => (
+        item.id === id ? { ...item, ...patch } : item
       )))
     }
+    const uploadBatch = async (batchItems: UploadItem[], isRetry: boolean) => {
+      const failedItems: UploadItem[] = []
 
-    try {
-      // 创建任务函数交给并发池调度，最多同时执行 3 个请求。
-      await runWithConcurrency(batch.map(({ item, index }) => async () => {
+      await runWithConcurrency(batchItems.map((item) => async () => {
         const attemptStart = performance.now()
         try {
-          updateItem(index, { status: 'uploading' })
+          updateItem(item.id, {
+            status: 'uploading',
+            retryCount: isRetry ? item.retryCount + 1 : item.retryCount,
+            url: undefined,
+            error: undefined,
+            duration: undefined,
+          })
+
           const result = await uploadTask(item.file)
-          // uploadTask 将请求失败转换为结果，需根据 success 判断状态。
-          updateItem(index, {
+          const firstAttemptFailed = !isRetry && !result.success
+
+          updateItem(item.id, {
             status: result.success ? 'success' : 'failed',
             url: result.url,
             error: result.error,
             duration: result.duration,
+            firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
           })
+
+          if (!result.success) {
+            failedItems.push({
+              ...item,
+              status: 'failed',
+              retryCount: isRetry ? item.retryCount + 1 : item.retryCount,
+              firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
+              url: result.url,
+              error: result.error,
+              duration: result.duration,
+            })
+          }
         } catch (error) {
-          // 兜住单任务意外抛错，标记失败后让 worker 继续处理其他任务。
-          updateItem(index, {
+          const firstAttemptFailed = !isRetry
+
+          updateItem(item.id, {
             status: 'failed',
+            error,
+            duration: performance.now() - attemptStart,
+            firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
+          })
+
+          failedItems.push({
+            ...item,
+            status: 'failed',
+            retryCount: isRetry ? item.retryCount + 1 : item.retryCount,
+            firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
             error,
             duration: performance.now() - attemptStart,
           })
         }
       }), CONCURRENCY_LIMIT)
+
+      return failedItems
+    }
+
+    try {
+      const firstAttemptFailedItems = await uploadBatch(batch, false)
+      const retryItems = firstAttemptFailedItems.filter((item) => item.retryCount < 1)
+
+      if (retryItems.length > 0) {
+        await uploadBatch(retryItems, true)
+      }
     } finally {
       // 批次结束后记录指标，并解除运行锁和界面的上传中状态。
       setTotalDuration(performance.now() - start)
@@ -164,8 +203,6 @@ export default function ImageUploader() {
           <div>
             第一轮失败：{metrics.firstAttemptFailedCount}
           </div>
-          <div>重试次数：{metrics.retryCount}</div>
-          <div>重试成功：{metrics.retrySuccessCount}</div>
           <div>
             总耗时：{metrics.totalDuration.toFixed(0)} ms
           </div>

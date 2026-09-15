@@ -10,6 +10,7 @@ export interface UploadItem {
   status: UploadStatus
 
   retryCount: number
+  firstAttemptFailed?: boolean
 
   duration?: number
   url?: string
@@ -23,7 +24,6 @@ export interface UploadMetrics {
 
   firstAttemptFailedCount: number
   retryCount: number
-  retrySuccessCount: number
 
   totalDuration: number
 }
