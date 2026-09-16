@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { uploadTask } from '../../services/uploadTask'
 import { runWithConcurrency } from '../../utils/runWithConcurrency'
 import type {
@@ -7,11 +7,15 @@ import type {
 } from '../../types/upload.ts'
 
 const CONCURRENCY_LIMIT = 3
+const UPLOAD_TIMEOUT_MS = 10000
 
 export default function ImageUploader() {
   const [items, setItems] = useState<UploadItem[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const runningRef = useRef(false)
+  const mountedRef = useRef(true)
+  const cancelRequestedRef = useRef(false)
+  const controllersRef = useRef(new Map<string, AbortController>())
   const [totalDuration, setTotalDuration] = useState(0)
   const metrics: UploadMetrics = {
     total: items.length,
@@ -24,6 +28,18 @@ export default function ImageUploader() {
 
     totalDuration,
   }
+
+  useEffect(() => {
+    const controllers = controllersRef.current
+
+    return () => {
+      // 页面离开时取消所有未完成请求，避免请求结束后继续更新已卸载组件。
+      mountedRef.current = false
+      cancelRequestedRef.current = true
+      controllers.forEach((controller) => controller.abort())
+      controllers.clear()
+    }
+  }, [])
 
   const handleFileChange = (
     event: React.ChangeEvent<HTMLInputElement>
@@ -43,6 +59,25 @@ export default function ImageUploader() {
     setTotalDuration(0)
   }
 
+  const handleCancelUpload = () => {
+    if (!runningRef.current) return
+
+    // 用户主动取消后，正在上传的请求 abort，尚未开始的任务也统一标记为 canceled。
+    cancelRequestedRef.current = true
+    controllersRef.current.forEach((controller) => controller.abort())
+    controllersRef.current.clear()
+    setItems((current) => current.map((item) => (
+      item.status === 'pending' || item.status === 'uploading'
+        ? {
+            ...item,
+            status: 'canceled',
+            error: undefined,
+            failureReason: 'canceled',
+          }
+        : item
+    )))
+  }
+
   const handleUpload = async () => {
     // 用 ref 同步拦截重复点击，避免状态更新前启动多个批次。
     if (runningRef.current) return
@@ -51,9 +86,13 @@ export default function ImageUploader() {
 
     // 锁定本批次，并记录开始时间，用于计算整批耗时。
     runningRef.current = true
+    cancelRequestedRef.current = false
     setIsUploading(true)
     const start = performance.now()
     const updateItem = (id: string, patch: Partial<UploadItem>) => {
+      // 卸载后跳过状态更新，防止异步任务晚返回时触发无意义 setState。
+      if (!mountedRef.current) return
+
       setItems((current) => current.map((item) => (
         item.id === id ? { ...item, ...patch } : item
       )))
@@ -63,6 +102,20 @@ export default function ImageUploader() {
 
       await runWithConcurrency(batchItems.map((item) => async () => {
         const attemptStart = performance.now()
+        // 取消可能发生在任务排队期间；worker 拿到任务时先判断，避免再发起请求。
+        if (cancelRequestedRef.current) {
+          updateItem(item.id, {
+            status: 'canceled',
+            failureReason: 'canceled',
+            duration: 0,
+          })
+          return
+        }
+
+        // 每个任务独立持有 controller，方便按批次统一取消正在上传的请求。
+        const controller = new AbortController()
+        controllersRef.current.set(item.id, controller)
+
         try {
           updateItem(item.id, {
             status: 'uploading',
@@ -70,20 +123,32 @@ export default function ImageUploader() {
             url: undefined,
             error: undefined,
             duration: undefined,
+            failureReason: undefined,
           })
 
-          const result = await uploadTask(item.file)
-          const firstAttemptFailed = !isRetry && !result.success
+          const result = await uploadTask(item.file, {
+            signal: controller.signal,
+            timeoutMs: UPLOAD_TIMEOUT_MS,
+          })
+          const isCanceled = result.failureReason === 'canceled'
+          // 用户取消不算第一轮失败，也不进入后续自动重试。
+          const firstAttemptFailed = !isRetry && !result.success && !isCanceled
+          const nextStatus = result.success
+            ? 'success'
+            : isCanceled
+              ? 'canceled'
+              : 'failed'
 
           updateItem(item.id, {
-            status: result.success ? 'success' : 'failed',
+            status: nextStatus,
             url: result.url,
             error: result.error,
             duration: result.duration,
+            failureReason: result.failureReason,
             firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
           })
 
-          if (!result.success) {
+          if (!result.success && !isCanceled) {
             failedItems.push({
               ...item,
               status: 'failed',
@@ -92,6 +157,7 @@ export default function ImageUploader() {
               url: result.url,
               error: result.error,
               duration: result.duration,
+              failureReason: result.failureReason,
             })
           }
         } catch (error) {
@@ -101,6 +167,7 @@ export default function ImageUploader() {
             status: 'failed',
             error,
             duration: performance.now() - attemptStart,
+            failureReason: 'request-failed',
             firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
           })
 
@@ -111,7 +178,10 @@ export default function ImageUploader() {
             firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
             error,
             duration: performance.now() - attemptStart,
+            failureReason: 'request-failed',
           })
+        } finally {
+          controllersRef.current.delete(item.id)
         }
       }), CONCURRENCY_LIMIT)
 
@@ -122,14 +192,19 @@ export default function ImageUploader() {
       const firstAttemptFailedItems = await uploadBatch(batch, false)
       const retryItems = firstAttemptFailedItems.filter((item) => item.retryCount < 1)
 
-      if (retryItems.length > 0) {
+      // 第一轮全部结束后才统一重试；用户取消后跳过重试轮。
+      if (!cancelRequestedRef.current && retryItems.length > 0) {
         await uploadBatch(retryItems, true)
       }
     } finally {
       // 批次结束后记录指标，并解除运行锁和界面的上传中状态。
-      setTotalDuration(performance.now() - start)
+      if (mountedRef.current) {
+        setTotalDuration(performance.now() - start)
+        setIsUploading(false)
+      }
+
+      controllersRef.current.clear()
       runningRef.current = false
-      setIsUploading(false)
     }
   }
 
@@ -177,16 +252,27 @@ export default function ImageUploader() {
         )}
       </div>
 
-      <button
-        disabled={isUploading || !items.some((item) => item.status === 'pending')}
-        onClick={handleUpload}
-        style={{
-          marginTop: 20,
-          padding: '8px 16px',
-        }}
-      >
-        {isUploading ? '上传中…' : '开始上传'}
-      </button>
+      <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+        <button
+          disabled={isUploading || !items.some((item) => item.status === 'pending')}
+          onClick={handleUpload}
+          style={{
+            padding: '8px 16px',
+          }}
+        >
+          {isUploading ? '上传中…' : '开始上传'}
+        </button>
+
+        <button
+          disabled={!isUploading}
+          onClick={handleCancelUpload}
+          style={{
+            padding: '8px 16px',
+          }}
+        >
+          取消上传
+        </button>
+      </div>
 
       <div
         style={{
