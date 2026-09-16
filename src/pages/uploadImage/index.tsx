@@ -12,9 +12,11 @@ const UPLOAD_TIMEOUT_MS = 10000
 export default function ImageUploader() {
   const [items, setItems] = useState<UploadItem[]>([])
   const [isUploading, setIsUploading] = useState(false)
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
   const runningRef = useRef(false)
   const mountedRef = useRef(true)
   const cancelRequestedRef = useRef(false)
+  const offlineDuringUploadRef = useRef(false)
   const controllersRef = useRef(new Map<string, AbortController>())
   const [totalDuration, setTotalDuration] = useState(0)
   const metrics: UploadMetrics = {
@@ -38,6 +40,43 @@ export default function ImageUploader() {
       cancelRequestedRef.current = true
       controllers.forEach((controller) => controller.abort())
       controllers.clear()
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true)
+    }
+
+    const handleOffline = () => {
+      setIsOnline(false)
+
+      if (runningRef.current) {
+        offlineDuringUploadRef.current = true
+        cancelRequestedRef.current = true
+
+        controllersRef.current.forEach((controller) => controller.abort())
+        controllersRef.current.clear()
+
+        setItems((current) => current.map((item) => (
+          item.status === 'pending' || item.status === 'uploading'
+            ? {
+                ...item,
+                status: 'failed',
+                error: new Error('网络已断开'),
+                failureReason: 'offline',
+              }
+            : item
+        )))
+      }
+    }
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
     }
   }, [])
 
@@ -81,12 +120,14 @@ export default function ImageUploader() {
   const handleUpload = async () => {
     // 用 ref 同步拦截重复点击，避免状态更新前启动多个批次。
     if (runningRef.current) return
+    if (!isOnline) return
     const batch = items.filter((item) => item.status === 'pending')
     if (batch.length === 0) return
 
     // 锁定本批次，并记录开始时间，用于计算整批耗时。
     runningRef.current = true
     cancelRequestedRef.current = false
+    offlineDuringUploadRef.current = false
     setIsUploading(true)
     const start = performance.now()
     const updateItem = (id: string, patch: Partial<UploadItem>) => {
@@ -104,9 +145,11 @@ export default function ImageUploader() {
         const attemptStart = performance.now()
         // 取消可能发生在任务排队期间；worker 拿到任务时先判断，避免再发起请求。
         if (cancelRequestedRef.current) {
+          const wasOffline = offlineDuringUploadRef.current
+
           updateItem(item.id, {
-            status: 'canceled',
-            failureReason: 'canceled',
+            status: wasOffline ? 'failed' : 'canceled',
+            failureReason: wasOffline ? 'offline' : 'canceled',
             duration: 0,
           })
           return
@@ -131,20 +174,23 @@ export default function ImageUploader() {
             timeoutMs: UPLOAD_TIMEOUT_MS,
           })
           const isCanceled = result.failureReason === 'canceled'
+          const isOfflineFailure = isCanceled && offlineDuringUploadRef.current
           // 用户取消不算第一轮失败，也不进入后续自动重试。
           const firstAttemptFailed = !isRetry && !result.success && !isCanceled
           const nextStatus = result.success
             ? 'success'
-            : isCanceled
+            : isOfflineFailure
+              ? 'failed'
+              : isCanceled
               ? 'canceled'
               : 'failed'
 
           updateItem(item.id, {
             status: nextStatus,
             url: result.url,
-            error: result.error,
+            error: isOfflineFailure ? new Error('网络已断开') : result.error,
             duration: result.duration,
-            failureReason: result.failureReason,
+            failureReason: isOfflineFailure ? 'offline' : result.failureReason,
             firstAttemptFailed: item.firstAttemptFailed || firstAttemptFailed,
           })
 
@@ -192,8 +238,12 @@ export default function ImageUploader() {
       const firstAttemptFailedItems = await uploadBatch(batch, false)
       const retryItems = firstAttemptFailedItems.filter((item) => item.retryCount < 1)
 
-      // 第一轮全部结束后才统一重试；用户取消后跳过重试轮。
-      if (!cancelRequestedRef.current && retryItems.length > 0) {
+      // 第一轮全部结束后才统一重试；用户取消或断网后跳过重试轮。
+      if (
+        !cancelRequestedRef.current &&
+        !offlineDuringUploadRef.current &&
+        retryItems.length > 0
+      ) {
         await uploadBatch(retryItems, true)
       }
     } finally {
@@ -219,6 +269,18 @@ export default function ImageUploader() {
       }}
     >
       <h2>批量图片上传</h2>
+
+      {!isOnline && (
+        <div style={{ marginBottom: 12, color: '#b00020' }}>
+          网络已断开，当前无法上传
+        </div>
+      )}
+
+      {isOnline && items.some((item) => item.failureReason === 'offline') && (
+        <div style={{ marginBottom: 12, color: '#166534' }}>
+          网络已恢复，可重新选择图片后上传
+        </div>
+      )}
 
       <input
         type="file"
@@ -254,7 +316,11 @@ export default function ImageUploader() {
 
       <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
         <button
-          disabled={isUploading || !items.some((item) => item.status === 'pending')}
+          disabled={
+            !isOnline ||
+            isUploading ||
+            !items.some((item) => item.status === 'pending')
+          }
           onClick={handleUpload}
           style={{
             padding: '8px 16px',
