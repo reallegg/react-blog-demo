@@ -9,9 +9,14 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:staging": "vite --mode staging",
     "build": "tsc -b && vite build",
+    "build:staging": "tsc -b && vite build --mode staging --outDir dist/staging",
+    "build:production": "tsc -b && vite build --mode production --outDir dist/production",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "preview:staging": "vite preview --outDir dist/staging --port 4174 --strictPort",
+    "preview:production": "vite preview --outDir dist/production --port 4175 --strictPort"
   },
   "dependencies": {
     "axios": "^1.13.2",
