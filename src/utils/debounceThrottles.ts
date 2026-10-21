@@ -1,12 +1,12 @@
-export function debounce<T extends (...args: any[]) => void> (
-    func: T,
+export function debounce<TArgs extends unknown[]> (
+    func: (...args: TArgs) => void,
     delay: number,
     immediate = false
 ) {
     // 联合声明
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    return (...args: Parameters<T>) => {
+    return (...args: TArgs) => {
 
         // 如果timer是null，并且immediate为true，代表是第一次触发，立即执行函数
         if (!timer && immediate) {
@@ -30,8 +30,8 @@ export function debounce<T extends (...args: any[]) => void> (
     }
   }
 
-export function throttle<T extends (...args: any[]) => void> (
-    func: T,
+export function throttle<TArgs extends unknown[]> (
+    func: (...args: TArgs) => void,
     delay: number,
     immediate = false
 ) {
@@ -39,7 +39,7 @@ export function throttle<T extends (...args: any[]) => void> (
     //一段时间内只执行一次
 
 
-    return (...args: Parameters<T>) => {
+    return (...args: TArgs) => {
         // 第一次触发立即执行，之后每隔delay秒执行一次
         if (!timer && immediate) {
             func(...args);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 const products = [
   'iPhone',
@@ -11,15 +11,10 @@ const products = [
 
 export default function FilterPractice() {
   const [keyword, setKeyword] = useState('')
-  const [list, setList] = useState<string[]>(products)
-
-  const filteredList = (keyword: string) => {
-    return products.filter((item) => item.includes(keyword))
-  }
-
-  useEffect(() => {
-    setList(filteredList(keyword))
-  }, [keyword])
+  const list = useMemo(
+    () => products.filter((item) => item.includes(keyword)),
+    [keyword],
+  )
 
   return (
     <div>

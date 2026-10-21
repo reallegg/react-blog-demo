@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 
-function Child({ options }) {
+interface SortOptions {
+  pageSize: number
+  sortBy: string
+}
+
+function Child({ options }: { options: SortOptions }) {
   useEffect(() => {
     console.log('Child effect run',options.sortBy)
   }, [options])

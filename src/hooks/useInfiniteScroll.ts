@@ -1,4 +1,5 @@
-import { RefObject, useEffect, useMemo, useRef } from "react";
+import { useEffect } from "react";
+import type { RefObject } from "react";
 import { debounce } from "../utils";
 
 type InfiniteScrollOptions = {
@@ -54,32 +55,18 @@ export function useInfiniteScroll({
     isLoading,
     onLoadMore,
 }: InfiniteScrollOptions) {
-    // 使用 ref 存储状态, 避免闭包拿旧值到值重复请求/不请求
-    // ref 可以指向任何值，包括 DOM 元素、组件实例、甚至是函数
-    // state 每次更新都会重新渲染组件， ref 不会重新渲染组件
-    // ref 不会在组件重新渲染时被重置，所以可以用来存储一些不需要重新渲染的值
-
-    // 使用 ref 存储一个会变的东西
-    const stateRef = useRef({ hasMore, isLoading, onLoadMore });
-    stateRef.current = { hasMore, isLoading, onLoadMore};
-
-    // 闭包过期本质：旧函数还在用，还在使用旧render创建出来的函数
-    const debouncedLoadMore = useMemo(() => {
-        return debounce(async () => {
-            const { hasMore, isLoading, onLoadMore } = stateRef.current;
-            if (!hasMore || isLoading) return;
-            await onLoadMore?.();
-        }, wait, immediate);
-    }, [wait, immediate]);
-
     useEffect(() => {
         const containerEl = containerRef?.current ?? null;
+        const debouncedLoadMore = debounce(async () => {
+            if (!hasMore || isLoading) return;
+            await onLoadMore();
+        }, wait, immediate);
 
         const check = () => {
             const { scrollTop, scrollHeight, clientHeight } = getScrollMetrics(containerEl);
             const isNearBottom = scrollTop + clientHeight >= scrollHeight - threshold;
             if (isNearBottom) {
-
+                debouncedLoadMore();
             }
         };
 
@@ -98,6 +85,6 @@ export function useInfiniteScroll({
                 window.removeEventListener('scroll', check);
             }
         };
-    }, [containerRef, debouncedLoadMore, threshold]);
+    }, [containerRef, hasMore, immediate, isLoading, onLoadMore, threshold, wait]);
 
-}   
+}

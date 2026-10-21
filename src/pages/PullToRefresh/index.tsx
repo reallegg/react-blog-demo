@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 
 export default function PageContainerScroll() {
@@ -13,7 +13,7 @@ export default function PageContainerScroll() {
     try {
       await new Promise((r) => setTimeout(r, 700));
       setItems((prev) => [...prev, ...Array.from({ length: 10 }, (_, i) => prev.length + i + 1)]);
-      setHasMore((_) => items.length + 10 < 80);
+      setHasMore(items.length + 10 < 80);
     } finally {
       setIsLoading(false);
     }

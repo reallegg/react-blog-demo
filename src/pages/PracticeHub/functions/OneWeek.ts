@@ -1,6 +1,6 @@
 // 一. 数组去重
 // 用 Set 数据结构，Set 的特性是同一个值只能存一份
-export default function OneArrayFilter(array: number[]) : number[]{
+export function OneArrayFilter(array: number[]): number[] {
   const set = new Set(array)
   return Array.from(set)
 
@@ -13,7 +13,7 @@ export default function OneArrayFilter(array: number[]) : number[]{
 
 // 二. 数组扁平化
 //只能处理一层的写法：for循环，一但判断到object就开始展开
-export default function FlatterArray(array: any[]) : number[] {
+export function FlatterArray(array: (number | number[])[]): number[] {
   const flattered: number[] = []
   for(const item of array){
     if(Array.isArray(item)){
@@ -26,7 +26,9 @@ export default function FlatterArray(array: any[]) : number[] {
 }
 
 //迭代处理多层的写法
-export default function FlatterIteration(array: any[]) : number[] {
+type NestedNumber = number | NestedNumber[]
+
+export function FlatterIteration(array: NestedNumber[]): number[] {
   const falttered: number[] = []
   for(const item of array){
     if(Array.isArray(item)){
@@ -41,13 +43,10 @@ export default function FlatterIteration(array: any[]) : number[] {
 // url参数解析
 // parseQuery('https://a.com?id=1&name=tom')
 // { id: '1', name: 'tom' }
-export default function UrlParamParsing(url: string) : any{} {
-  //1. 从 ‘？’ 开始判断
-  //2. split by '&'
-  //3. split by '='
-  // const object: Record<string, string> = {}
-  // const array : string[] = url.split('?')[1]?.split('&')
+export function UrlParamParsing(url: string): Record<string, string> {
+  const queryStart = url.indexOf('?')
+  if (queryStart === -1) return {}
 
-  // for (const pair of queryString)
-
+  const query = url.slice(queryStart + 1).split('#', 1)[0]
+  return Object.fromEntries(new URLSearchParams(query))
 }
