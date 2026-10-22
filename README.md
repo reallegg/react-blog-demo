@@ -1,5 +1,35 @@
 # React + TypeScript + Vite
 
+## Environments and deployment
+
+Build and preview each environment locally:
+
+```bash
+npm run build:staging
+npm run preview:staging
+
+npm run build:production
+npm run preview:production
+```
+
+The application is deployed as static files to private S3 buckets behind
+CloudFront. Merges to `main` deploy staging; `v*` tags deploy production after
+any protection rules configured on the GitHub `production` Environment pass.
+
+Create the S3 buckets, CloudFront distributions, and GitHub OIDC deployment
+roles in the AWS console. Then create GitHub Environments named `staging` and
+`production`, each with these variables:
+
+- `AWS_ACCOUNT_ID`
+- `AWS_REGION`
+- `AWS_ROLE_ARN`
+- `S3_BUCKET`
+- `CLOUDFRONT_DISTRIBUTION_ID`
+- `SITE_URL`
+
+Never store secrets in `VITE_*` variables because they are included in the
+browser bundle.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
