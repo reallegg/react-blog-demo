@@ -1,0 +1,118 @@
+name: Rollback Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to restore (for example, v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+    env:
+      TARGET_VERSION: ${{ inputs.version }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      S3_BUCKET: ${{ vars.S3_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+
+    steps:
+      - name: Validate rollback target
+        shell: bash
+        run: |
+          if [[ ! "$TARGET_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Rollback target must be a stable semantic version tag such as v0.1.0"
+            exit 1
+          fi
+
+      - name: Check out target release
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+
+      - name: Verify release tag
+        shell: bash
+        run: |
+          git rev-parse --verify "refs/tags/${TARGET_VERSION}^{commit}"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$TARGET_VERSION")"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Validate deployment variables
+        shell: bash
+        run: |
+          test -n "$AWS_ACCOUNT_ID" || { echo "Missing AWS_ACCOUNT_ID"; exit 1; }
+          test -n "$AWS_REGION" || { echo "Missing AWS_REGION"; exit 1; }
+          test -n "$AWS_ROLE_ARN" || { echo "Missing AWS_ROLE_ARN"; exit 1; }
+          test -n "$S3_BUCKET" || { echo "Missing S3_BUCKET"; exit 1; }
+          test -n "$CLOUDFRONT_DISTRIBUTION_ID" || { echo "Missing CLOUDFRONT_DISTRIBUTION_ID"; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build production release
+        run: npm run build:production
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: GitHubRollback-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Restore immutable assets
+        shell: bash
+        run: |
+          aws s3 sync "dist/production/assets" "s3://${S3_BUCKET}/assets" \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable"
+
+      - name: Restore application shell
+        shell: bash
+        run: |
+          aws s3 sync "dist/production" "s3://${S3_BUCKET}" \
+            --delete \
+            --exclude "assets/*" \
+            --cache-control "no-cache"
+
+      - name: Invalidate production cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
+
+      - name: Summarize rollback
+        shell: bash
+        run: |
+          {
+            echo "## Production rollback requested"
+            echo ""
+            echo "- Restored release: \`$TARGET_VERSION\`"
+            echo "- Commit: \`$(git rev-parse --short HEAD)\`"
+            echo "- Target: \`$S3_BUCKET\`"
+            echo "- CloudFront cache invalidated: \`/*\`"
+          } >> "$GITHUB_STEP_SUMMARY"
